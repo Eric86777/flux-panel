@@ -81,17 +81,37 @@ fi
 # ===== 安装Caddy =====
 if ! command -v caddy &>/dev/null; then
     echo "🔧 安装Caddy..."
-    apt update && apt install -y curl unzip
-    
-    # 使用官方安装脚本
-    curl -sSfL https://caddyserver.com/static/install.sh | bash -s
-    
-    # 或者使用包管理器安装（取消注释以下行）
-    # curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    # curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-    # apt update
-    # apt install caddy
-    
+    apt update && apt install -y curl unzip gnupg
+
+    echo "🌐 尝试使用官方安装脚本..."
+    set +e
+    curl -sSfL https://caddyserver.com/static/install.sh -o /tmp/install_caddy.sh
+    curl_status=$?
+    if [[ $curl_status -eq 0 ]]; then
+        bash /tmp/install_caddy.sh
+        install_status=$?
+    else
+        install_status=$curl_status
+    fi
+    set -e
+    rm -f /tmp/install_caddy.sh
+
+    if [[ $curl_status -ne 0 || $install_status -ne 0 ]]; then
+        echo "⚠️ 官方脚本不可用，改用APT仓库安装Caddy..."
+        mkdir -p /usr/share/keyrings /etc/apt/sources.list.d
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg.tmp
+        gpg --dearmor --yes --output /usr/share/keyrings/caddy-stable-archive-keyring.gpg /usr/share/keyrings/caddy-stable-archive-keyring.gpg.tmp
+        rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg.tmp
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+        apt update
+        apt install -y caddy
+    fi
+
+    if ! command -v caddy &>/dev/null; then
+        echo "❌ Caddy 安装失败，请手动检查环境后重试"
+        exit 1
+    fi
+
     # 确保caddy在正确位置
     if [[ -f "/usr/bin/caddy" ]]; then
         mv /usr/bin/caddy /usr/local/bin/caddy
