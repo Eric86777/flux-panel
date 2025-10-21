@@ -4,6 +4,116 @@
 
 set -e
 
+export DEBIAN_FRONTEND=noninteractive
+
+install_caddy_from_apt() {
+    echo "🌐 尝试通过APT仓库安装Caddy..."
+    set +e
+    local status=0
+    local log_file="/tmp/caddy-apt-install.log"
+
+    : >"$log_file"
+
+    local tmp_key
+    local tmp_list
+    tmp_key=$(mktemp)
+    tmp_list=$(mktemp)
+
+    if [[ $status -eq 0 ]]; then
+        mkdir -p /usr/share/keyrings /etc/apt/sources.list.d >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        apt-get update >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        apt-get install -y --no-install-recommends debian-keyring debian-archive-keyring apt-transport-https curl gnupg >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        curl -fsSL --retry 3 --retry-delay 2 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o "$tmp_key" >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        gpg --dearmor --yes --output /usr/share/keyrings/caddy-stable-archive-keyring.gpg "$tmp_key" >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        curl -fsSL --retry 3 --retry-delay 2 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o "$tmp_list" >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        install -m 644 "$tmp_list" /etc/apt/sources.list.d/caddy-stable.list >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        apt-get update >>"$log_file" 2>&1 || status=$?
+    fi
+
+    if [[ $status -eq 0 ]]; then
+        apt-get install -y --no-install-recommends caddy >>"$log_file" 2>&1 || status=$?
+    fi
+
+    rm -f "$tmp_key" "$tmp_list"
+
+    set -e
+    return $status
+}
+
+install_caddy_from_github() {
+    echo "🌐 APT 仓库不可用，尝试从 GitHub 下载 Caddy 二进制..."
+    set +e
+    local workdir="/tmp/caddy-download"
+    local status=0
+    local arch="$(uname -m)"
+    local caddy_arch=""
+
+    case "$arch" in
+        x86_64|amd64)
+            caddy_arch="amd64"
+            ;;
+        aarch64|arm64)
+            caddy_arch="arm64"
+            ;;
+        armv7l|armv7)
+            caddy_arch="armv7"
+            ;;
+        armv6l|armv6)
+            caddy_arch="armv6"
+            ;;
+        *)
+            echo "❌ 当前架构($arch)暂不支持自动安装"
+            set -e
+            return 1
+            ;;
+    esac
+
+    rm -rf "$workdir"
+    mkdir -p "$workdir"
+
+    if [[ $status -eq 0 ]]; then
+        curl -sSfL "https://github.com/caddyserver/caddy/releases/latest/download/caddy-linux-${caddy_arch}.tar.gz" -o "$workdir/caddy.tar.gz" || status=$?
+    fi
+    if [[ $status -eq 0 ]]; then
+        tar -xzf "$workdir/caddy.tar.gz" -C "$workdir" || status=$?
+    fi
+    if [[ $status -eq 0 ]]; then
+        install -m 755 "$workdir/caddy" /usr/local/bin/caddy || status=$?
+    fi
+    if [[ $status -eq 0 ]]; then
+        setcap 'cap_net_bind_service=+ep' /usr/local/bin/caddy 2>/dev/null || true
+    fi
+
+    rm -rf "$workdir"
+    set -e
+    return $status
+}
+
 ENV_FILE="/etc/caddy/dns.env"
 SYSTEMD_SERVICE="/etc/systemd/system/caddy.service"
 
@@ -81,21 +191,36 @@ fi
 # ===== 安装Caddy =====
 if ! command -v caddy &>/dev/null; then
     echo "🔧 安装Caddy..."
-    apt update && apt install -y curl unzip
-    
-    # 使用官方安装脚本
-    curl -sSfL https://caddyserver.com/static/install.sh | bash -s
-    
-    # 或者使用包管理器安装（取消注释以下行）
-    # curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    # curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-    # apt update
-    # apt install caddy
-    
-    # 确保caddy在正确位置
-    if [[ -f "/usr/bin/caddy" ]]; then
-        mv /usr/bin/caddy /usr/local/bin/caddy
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl unzip gnupg libcap2-bin
+
+    install_success=false
+
+    if install_caddy_from_apt && command -v caddy &>/dev/null; then
+        echo "✅ 已通过APT仓库安装Caddy"
+        install_success=true
+    else
+        echo "⚠️ APT 仓库安装失败，详细日志位于 /tmp/caddy-apt-install.log"
+        if install_caddy_from_github && command -v caddy &>/dev/null; then
+            echo "✅ 已通过GitHub二进制安装Caddy"
+            install_success=true
+        else
+            echo "⚠️ GitHub 二进制安装失败或未检测到Caddy"
+        fi
     fi
+
+    if [[ $install_success != true ]]; then
+        echo "❌ Caddy 安装失败，请手动检查环境后重试"
+        exit 1
+    fi
+
+    # 确保caddy在正确位置
+fi
+
+caddy_bin=$(command -v caddy)
+if [[ -z "$caddy_bin" ]]; then
+    echo "❌ 未找到Caddy可执行文件，请检查安装"
+    exit 1
 fi
 
 mkdir -p /etc/caddy
@@ -116,8 +241,8 @@ After=network.target
 [Service]
 User=root
 EnvironmentFile=$ENV_FILE
-ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
-ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecStart=$caddy_bin run --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecReload=$caddy_bin reload --config /etc/caddy/Caddyfile --adapter caddyfile
 Restart=on-abnormal
 
 [Install]
