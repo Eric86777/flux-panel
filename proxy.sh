@@ -21,33 +21,12 @@ install_caddy_from_apt() {
     fi
 
     if [[ $status -eq 0 ]]; then
-        local os_id=""
-        local repo_file=""
-        if [[ -r /etc/os-release ]]; then
-            # shellcheck disable=SC1091
-            . /etc/os-release
-            os_id=${ID:-}
-        fi
-
-        case "$os_id" in
-            ubuntu)
-                repo_file="https://dl.cloudsmith.io/public/caddy/stable/deb/ubuntu/ubuntu.deb.txt"
-                ;;
-            debian)
-                repo_file="https://dl.cloudsmith.io/public/caddy/stable/deb/debian/debian.deb.txt"
-                ;;
-            *)
-                repo_file="https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt"
-                ;;
-        esac
-
         curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' |
             gpg --dearmor --yes --output /usr/share/keyrings/caddy-stable-archive-keyring.gpg >>"$log_file" 2>&1 || status=$?
+    fi
 
-        if [[ $status -eq 0 ]]; then
-            curl -1sLf "$repo_file" |
-                tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null >>"$log_file" 2>&1 || status=$?
-        fi
+    if [[ $status -eq 0 ]]; then
+        curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list >>"$log_file" 2>&1 || status=$?
     fi
 
     if [[ $status -eq 0 ]]; then
