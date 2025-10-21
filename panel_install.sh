@@ -45,8 +45,34 @@ check_docker() {
       exit 1
     fi
   else
-    echo "错误：未检测到 docker 或 docker-compose 命令。请先安装 Docker。"
-    exit 1
+    echo "⚠️  未检测到 Docker"
+    read -p "是否自动安装 Docker？(y/N): " install_docker
+    if [[ "$install_docker" =~ ^[Yy]$ ]]; then
+      echo "🔧 开始安装 Docker..."
+      if curl -fsSL https://get.docker.com | sh; then
+        echo "✅ Docker 安装成功"
+        systemctl start docker
+        systemctl enable docker
+        # 重新检测Docker命令
+        if command -v docker &> /dev/null; then
+          if docker compose version &> /dev/null; then
+            DOCKER_CMD="docker compose"
+          else
+            echo "错误：Docker 安装成功，但不支持 'docker compose' 命令。"
+            exit 1
+          fi
+        else
+          echo "错误：Docker 安装失败。"
+          exit 1
+        fi
+      else
+        echo "❌ Docker 安装失败，请手动安装后重试。"
+        exit 1
+      fi
+    else
+      echo "❌ 取消安装。请手动安装 Docker 后重试。"
+      exit 1
+    fi
   fi
   echo "检测到 Docker 命令：$DOCKER_CMD"
 }
@@ -152,7 +178,7 @@ show_menu() {
   echo "2. 更新面板"
   echo "3. 卸载面板"
   echo "4. 导出备份"
-  echo "5. 安装并配置反向代理（Caddy）"
+  echo "5. 安装面板后开启反向代理"
   echo "6. 退出"
   echo "==============================================="
 }
@@ -990,9 +1016,9 @@ export_migration_sql() {
   fi
 }
 
-# ===================== 新增：安装并配置反向代理（Caddy） =====================
+# ===================== 安装面板后开启反向代理 =====================
 install_reverse_proxy() {
-  echo "🚀 开始安装并配置 Caddy 反向代理..."
+  echo "🚀 开始安装反向代理（Caddy）..."
   # 尽量读取前端端口作为反代后端端口的建议值
   FRONTEND_HINT=""
   if [[ -f ".env" ]]; then

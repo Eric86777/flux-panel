@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # caddy-reverse-proxy.sh
-# 自动安装&配置Caddy反代（支持SSL、DNS验证、IPv6、WS、自动续期免输入）
+# 自动安装&配置Caddy反代（支持SSL、HTTP验证、IPv6、WS、自动续期）
 
 set -e
 
-ENV_FILE="/etc/caddy/dns.env"
 SYSTEMD_SERVICE="/etc/systemd/system/caddy.service"
 
 # ===== 用户输入 =====
@@ -22,52 +21,8 @@ if [[ -z "$domain" ]]; then
 fi
 
 read -rp "请输入邮箱（可选，留空则不设置）: " ssl_email
-read -rp "是否使用 DNS 验证申请证书？[y/N]: " use_dns
-use_dns=${use_dns:-N}
 
-dns_provider=""
-declare -A env_vars
-
-if [[ "$use_dns" =~ ^[Yy]$ ]]; then
-  echo "请选择 DNS 服务商:"
-  echo "1) Cloudflare"
-  echo "2) Dnspod (国内站)"
-  echo "3) Dnspod (国际站)"
-  echo "4) Aliyun (国内)"
-  echo "5) Aliyun (国际)"
-  read -rp "输入编号: " dns_choice
-
-  case $dns_choice in
-    1)
-      dns_provider="cloudflare"
-      read -rp "Cloudflare API Token: " CF_API_TOKEN
-      env_vars["CF_API_TOKEN"]=$CF_API_TOKEN
-      ;;
-    2)
-      dns_provider="dnspod"
-      read -rp "Dnspod 国内站 API ID: " DP_ID
-      read -rp "Dnspod 国内站 API Key: " DP_KEY
-      env_vars["DP_ID"]=$DP_ID
-      env_vars["DP_KEY"]=$DP_KEY
-      ;;
-    3)
-      dns_provider="dnspod"
-      read -rp "Dnspod 国际站 API Token: " DP_TOKEN
-      env_vars["DP_TOKEN"]=$DP_TOKEN
-      ;;
-    4|5)
-      dns_provider="alidns"
-      read -rp "Aliyun AccessKey ID: " ALICLOUD_ACCESS_KEY
-      read -rp "Aliyun AccessKey Secret: " ALICLOUD_SECRET_KEY
-      env_vars["ALICLOUD_ACCESS_KEY"]=$ALICLOUD_ACCESS_KEY
-      env_vars["ALICLOUD_SECRET_KEY"]=$ALICLOUD_SECRET_KEY
-      ;;
-    *)
-      echo "❌ 无效选项"
-      exit 1
-      ;;
-  esac
-fi
+echo "ℹ️  将使用HTTP验证申请SSL证书（通过80端口自动验证）"
 
 # ===== 检查IPv6支持 =====
 if ping6 -c1 google.com &>/dev/null; then
@@ -108,14 +63,7 @@ fi
 
 mkdir -p /etc/caddy
 
-# ===== 保存环境变量到dns.env =====
-echo "# Caddy DNS Provider API Keys" >"$ENV_FILE"
-for key in "${!env_vars[@]}"; do
-  echo "$key=${env_vars[$key]}" >>"$ENV_FILE"
-done
-chmod 600 "$ENV_FILE"
-
-# ===== 配置systemd服务加载环境变量 =====
+# ===== 配置systemd服务 =====
 cat >"$SYSTEMD_SERVICE" <<EOF
 [Unit]
 Description=Caddy web server
@@ -123,7 +71,6 @@ After=network.target
 
 [Service]
 User=root
-EnvironmentFile=$ENV_FILE
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 Restart=on-abnormal
@@ -132,59 +79,44 @@ Restart=on-abnormal
 WantedBy=multi-user.target
 EOF
 
-# ===== 全局配置 =====
-if [[ -n "$ssl_email" ]]; then
-    global_cfg="{ email $ssl_email }"
-else
-    global_cfg="{}"
-fi
-
 # ===== 生成Caddyfile =====
-if [[ -n "$dns_provider" ]]; then
+# 生成全局配置块（如果有邮箱）
+if [[ -n "$ssl_email" ]]; then
 cat >/etc/caddy/Caddyfile <<EOF
-$global_cfg
+{
+    email $ssl_email
+}
 
-https://$domain:$listen_port {
+$domain {
     bind $listen_address
     encode gzip
-    tls {
-        dns $dns_provider
-    }
+    
     @websockets {
         header Connection *Upgrade*
         header Upgrade websocket
     }
+    
     reverse_proxy $backend_host:$backend_port {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
     }
-}
-http://$domain:80 {
-    redir https://$domain:$listen_port{uri} permanent
 }
 EOF
 else
 cat >/etc/caddy/Caddyfile <<EOF
-$global_cfg
-
-https://$domain:$listen_port {
+$domain {
     bind $listen_address
     encode gzip
+    
     @websockets {
         header Connection *Upgrade*
         header Upgrade websocket
     }
+    
     reverse_proxy $backend_host:$backend_port {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
     }
-}
-http://$domain:80 {
-    redir https://$domain:$listen_port{uri} permanent
 }
 EOF
 fi
@@ -195,5 +127,6 @@ systemctl enable caddy
 systemctl restart caddy
 
 echo "✅ Caddy反代已部署完成"
-echo "🔑 证书续期将自动使用 $ENV_FILE 中的DNS API Key，无需再次输入"
-echo "访问地址：https://$domain:$listen_port"
+echo "🔐 证书将通过HTTP-01验证自动申请和续期"
+echo "🌐 访问地址：https://$domain"
+echo "ℹ️  首次访问可能需要等待几秒钟完成证书申请"
