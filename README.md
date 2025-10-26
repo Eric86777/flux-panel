@@ -55,3 +55,7 @@ curl -L https://raw.githubusercontent.com/Eric86777/flux-panel/refs/heads/main/p
 请务必在合法、合规、安全的前提下使用本项目。  
 
 ---
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Eric86777/flux-panel&type=Date)](https://www.star-history.com/#Eric86777/flux-panel&Date)
